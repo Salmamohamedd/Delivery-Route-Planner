@@ -6,8 +6,8 @@ delivery trips, respecting vehicle capacity, delivery priority, and area
 grouping preferences.
 
 Run:
-    python delivery_planner.py sample_deliveries.csv
-    python delivery_planner.py sample_deliveries.csv --capacity 12.5
+    python router.py sample_deliveries.csv
+    python router.py sample_deliveries.csv --capacity 12.5
 """
 
 import csv
@@ -24,23 +24,50 @@ class Delivery:
     weight: float
 
 
-def read_deliveries(path: str) -> List[Delivery]:
-    """Reads deliveries from a CSV file with columns: id, area, priority, weight_kg."""
+def parse_delivery_row(row: dict) -> Delivery:
+    """Parses and validates a single CSV row into a Delivery. Raises ValueError
+    with a human-readable reason if the row is malformed."""
+    id_ = (row.get("id") or "").strip()
+    area = (row.get("area") or "").strip()
+    priority_raw = (row.get("priority") or "").strip()
+    weight_raw = (row.get("weight_kg") or "").strip()
+
+    if not id_:
+        raise ValueError("missing id")
+    if not area:
+        raise ValueError("missing area")
+
+    try:
+        priority = int(priority_raw)
+    except ValueError:
+        raise ValueError(f"priority '{priority_raw}' is not a whole number")
+
+    try:
+        weight = float(weight_raw)
+    except ValueError:
+        raise ValueError(f"weight_kg '{weight_raw}' is not a number")
+
+    if weight <= 0:
+        raise ValueError(f"weight_kg must be positive, got {weight}")
+
+    return Delivery(id=id_, area=area, priority=priority, weight=weight)
+
+
+def read_deliveries(path: str):
+    """Reads deliveries from a CSV file with columns: id, area, priority, weight_kg.
+    Malformed rows (missing fields, non-numeric priority/weight, non-positive
+    weight) are skipped rather than crashing the program, and returned
+    separately so they can be reported to the user."""
     deliveries = []
+    invalid_rows = []
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            if not row["id"] or not row["area"] or not row["priority"] or not row["weight_kg"]:
-                continue  # skip rows with missing data
-            deliveries.append(
-                Delivery(
-                    id=row["id"].strip(),
-                    area=row["area"].strip(),
-                    priority=int(row["priority"]),
-                    weight=float(row["weight_kg"]),
-                )
-            )
-    return deliveries
+        for line_number, row in enumerate(reader, start=2):  # +1 for header, +1 for 1-based
+            try:
+                deliveries.append(parse_delivery_row(row))
+            except ValueError as e:
+                invalid_rows.append((line_number, str(e)))
+    return deliveries, invalid_rows
 
 
 def split_valid_and_oversized(deliveries: List[Delivery], capacity: float):
@@ -56,10 +83,10 @@ def group_by_priority(deliveries: List[Delivery]):
     """Groups deliveries into priority tiers, preserving original input order
     within each tier. Lower priority number = more urgent = earlier tier.
     This is a hard ordering rule: nothing below ever reorders across tiers."""
-    tiers = {}  # priority -> list of deliveries
+    tiers = {}
     for d in deliveries:
         tiers.setdefault(d.priority, []).append(d)
-    return [tiers[p] for p in sorted(tiers)]  # return a list of lists, sorted by priority
+    return [tiers[p] for p in sorted(tiers)]
 
 
 def build_trips(deliveries: List[Delivery], capacity: float):
@@ -78,7 +105,6 @@ def build_trips(deliveries: List[Delivery], capacity: float):
       in the tier fits, the trip is closed and a new one is opened.
     """
     tiers = group_by_priority(deliveries)
-    print(tiers)  # debug print to show the tiers list
     trips = []
 
     for tier in tiers:
@@ -122,9 +148,9 @@ def build_trips(deliveries: List[Delivery], capacity: float):
     return trips
 
 
-def format_report(trips, oversized, capacity) -> str:
+def format_report(trips, oversized, invalid_rows, capacity) -> str:
     lines = []
-    if not trips and not oversized:
+    if not trips and not oversized and not invalid_rows:
         lines.append("No deliveries to process.")
         return "\n".join(lines)
 
@@ -143,6 +169,11 @@ def format_report(trips, oversized, capacity) -> str:
         for d in oversized:
             lines.append(f"  - #{d.id} {d.area} weight={d.weight}kg > {capacity:.1f}kg capacity")
 
+    if invalid_rows:
+        lines.append("\nSkipped malformed rows:")
+        for line_number, reason in invalid_rows:
+            lines.append(f"  - line {line_number}: {reason}")
+
     return "\n".join(lines)
 
 
@@ -157,10 +188,10 @@ def main():
     )
     args = parser.parse_args()
 
-    deliveries = read_deliveries(args.input)
+    deliveries, invalid_rows = read_deliveries(args.input)
     valid, oversized = split_valid_and_oversized(deliveries, args.capacity)
     trips = build_trips(valid, args.capacity)
-    # print(format_report(trips, oversized, args.capacity))
+    print(format_report(trips, oversized, invalid_rows, args.capacity))
 
 
 if __name__ == "__main__":

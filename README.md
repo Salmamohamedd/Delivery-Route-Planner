@@ -5,13 +5,19 @@
 Requires Python 3.8+, no external dependencies.
 
 ```bash
-python delivery_planner.py sample_deliveries.csv
+python router.py sample_deliveries.csv
 ```
 
 Optional: override the default 10 kg vehicle capacity:
 
 ```bash
-python delivery_planner.py sample_deliveries.csv --capacity 12.5
+python router.py sample_deliveries.csv --capacity 12.5
+```
+
+Run the test suite (requires `pytest`, `pip install pytest`):
+
+```bash
+pytest test_router.py -v
 ```
 
 ### Input format
@@ -44,7 +50,10 @@ still fits under the capacity and (b) shares an area with what's already in
 the trip, preferring that over just taking the next item in sequence. Once
 nothing left in the tier fits, the trip is closed and a new one starts.
 Deliveries heavier than the vehicle capacity are pulled out up front and
-reported separately, since they can never be assigned to any trip.
+reported separately, since they can never be assigned to any trip. Rows
+that fail to parse (missing id/area, non-numeric priority or weight,
+non-positive weight) are skipped rather than crashing the program, and are
+listed separately in the output with the offending line number and reason.
 
 **2. Most difficult part**
 
@@ -59,7 +68,7 @@ getting real grouping benefit.
 
 Yes. This is a greedy heuristic, not an optimal bin-packing solver (true
 optimal packing is NP-hard), so it can leave capacity on the table. For
-example, if the first two items placed in a trip use 8.5 kg of the 10 kg
+example, if the first two items placed in a trip use 9.5 kg of the 10 kg
 capacity, a later same-area 1 kg item that would have fit perfectly may end
 up alone in its own near-empty trip instead, simply because of the order
 items were seeded. The algorithm also only ever looks *forward* within the
@@ -80,17 +89,30 @@ CSV row-by-row instead of materializing the whole file at once.
 
 - Replace the linear area scan with an indexed structure (dict of area ->
   deque) for O(1) same-area lookups instead of O(n) scans.
-- Add unit tests covering each edge case explicitly (empty input, all-same
-  priority, exact-capacity fits, oversized packages).
 - Try a proper bin-packing heuristic (e.g., Best-Fit Decreasing, weighted
   by area affinity) and compare trip counts / utilization against the
   current greedy Next-Fit approach.
 - Stream large CSV files instead of loading them fully into memory.
 
-## Extension: configurable vehicle capacity
+## Extensions
 
-The brief hardcodes a 10 kg limit, but real delivery fleets rarely have a
-single vehicle size. I added a `--capacity` CLI flag (default 10.0) so the
-same planner can be reused for a bike, a small van, or a larger truck
-without touching the code — a small, directly relevant change rather than
-an unrelated feature bolted on for its own sake.
+**Configurable vehicle capacity.** The brief hardcodes a 10 kg limit, but
+real delivery fleets rarely have a single vehicle size. I added a
+`--capacity` CLI flag (default 10.0) so the same planner can be reused for
+a bike, a small van, or a larger truck without touching the code.
+
+**Malformed-row handling.** Real-world CSV exports aren't always clean.
+Rather than letting a bad row (empty field, non-numeric priority/weight,
+zero or negative weight) crash the whole run, `parse_delivery_row` validates
+each row individually; invalid rows are skipped and reported with their
+line number and reason, while the rest of the file is still processed
+normally. This extends the same "handle unusual cases gracefully" idea the
+assignment already asks for around oversized packages and empty input.
+
+## Tests
+
+`test_router.py` covers each function in isolation plus the
+edge cases named in the brief: no deliveries, an oversized package,
+multiple deliveries sharing a priority, malformed CSV rows, trips that
+would exceed capacity, and the invariant that every valid delivery ends
+up in exactly one trip.
